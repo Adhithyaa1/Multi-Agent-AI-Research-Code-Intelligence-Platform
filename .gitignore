@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Next.js
+research-agent/.next/
+research-agent/out/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+research-agent/.env.local
+
+# Local runtime data (ChromaDB, clones, uploads, metrics)
+backend/data/
+research-agent/uploads/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs / coverage
+*.log
+npm-debug.log*
+coverage/
+.turbo/
