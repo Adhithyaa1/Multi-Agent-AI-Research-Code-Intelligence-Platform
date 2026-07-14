@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
+import uuid
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from typing import Literal
@@ -13,7 +16,16 @@ from pydantic import BaseModel, Field
 
 from code_index import index_repo, retrieve_code
 from code_store import file_tree, get_repo, numbered_content, read_file, register_repo
-from config import REPO_ROOT, RESEARCH_TOP_K, CORS_ALLOW_ORIGINS
+from config import (
+    CODE_EXTENSIONS,
+    CODE_REPOS_DIR,
+    CORS_ALLOW_ORIGINS,
+    MAX_CODE_FILES,
+    REPO_ROOT,
+    RESEARCH_TOP_K,
+    SUPPORTED_EXTENSIONS,
+    UPLOADS_DIR,
+)
 from embeddings import ingest_document
 from eval_store import get_metrics, log_run
 from github_clone import clone_github_repo
@@ -167,6 +179,92 @@ def ingest(request: IngestRequest) -> IngestResponse:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail="Ingestion failed.") from error
+
+
+def _safe_filename(name: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]", "_", Path(name).name)
+    return cleaned or "upload.bin"
+
+
+@app.post("/ingest/upload", response_model=IngestResponse)
+async def ingest_upload(file: UploadFile = File(...)) -> IngestResponse:
+    """Accept a document upload, save on the backend, and ingest into ChromaDB."""
+    original = file.filename or "document.txt"
+    suffix = Path(original).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Supported types: PDF, Markdown (.md), and plain text (.txt).",
+        )
+
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    saved_name = f"{int(time.time() * 1000)}-{_safe_filename(original)}"
+    target = UPLOADS_DIR / saved_name
+
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        target.write_bytes(content)
+        result = ingest_document(str(target))
+        return IngestResponse(**result)
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail="Ingestion failed.") from error
+
+
+@app.post("/code/upload", response_model=CodeIngestResponse)
+async def code_upload(files: list[UploadFile] = File(...)) -> CodeIngestResponse:
+    """Accept code files from the browser and register them as a repository."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided.")
+
+    repo_dir = CODE_REPOS_DIR / f"upload-{uuid.uuid4().hex[:12]}"
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    project_name = "uploaded-project"
+    saved = 0
+
+    try:
+        for upload in files[:MAX_CODE_FILES]:
+            raw_name = upload.filename or ""
+            rel = raw_name.replace("\\", "/").lstrip("./")
+            rel = re.sub(r"\.\.+", "_", rel)
+            if not rel:
+                continue
+            suffix = Path(rel).suffix.lower()
+            if suffix not in CODE_EXTENSIONS:
+                continue
+            if "/" in rel:
+                project_name = rel.split("/")[0] or project_name
+
+            target = repo_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = await upload.read()
+            target.write_bytes(content)
+            saved += 1
+
+        if saved == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No supported code files (.py, .js, .ts, etc.).",
+            )
+
+        repo = register_repo(str(repo_dir), project_name)
+        return CodeIngestResponse(
+            repo_id=repo.repo_id,
+            name=repo.name,
+            file_count=len(repo.files),
+            files=[f.path for f in repo.files],
+        )
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail="Code upload failed.") from error
 
 
 @app.post("/retrieve", response_model=RetrieveResponse)

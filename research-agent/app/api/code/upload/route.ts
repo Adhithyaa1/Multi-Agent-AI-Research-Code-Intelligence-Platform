@@ -1,9 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { registerCodeRepo } from "@/lib/code-client";
+import { RAG_BACKEND_URL } from "@/lib/config";
 import type { CodeRepoInfo } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 const CODE_EXTENSIONS = new Set([
   ".py", ".js", ".ts", ".tsx", ".jsx", ".md", ".txt", ".json",
@@ -11,12 +10,8 @@ const CODE_EXTENSIONS = new Set([
 ]);
 
 function isCodeFile(name: string): boolean {
-  const ext = path.extname(name).toLowerCase();
+  const ext = name.includes(".") ? `.${name.split(".").pop()?.toLowerCase()}` : "";
   return CODE_EXTENSIONS.has(ext);
-}
-
-function safeRelativePath(raw: string): string {
-  return raw.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\.\./g, "_");
 }
 
 export async function POST(req: Request) {
@@ -43,32 +38,45 @@ export async function POST(req: Request) {
     );
   }
 
-  const repoId = `${Date.now()}-code`;
-  const repoDir = path.join(process.cwd(), "uploads", "code", repoId);
-  await mkdir(repoDir, { recursive: true });
-
-  let projectName = "uploaded-project";
-
+  const outbound = new FormData();
   for (const file of codeFiles.slice(0, 40)) {
-    const relativePath = safeRelativePath(
+    const relativePath =
       (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
-        file.name,
-    );
-    if (relativePath.includes("/")) {
-      projectName = relativePath.split("/")[0] ?? projectName;
-    }
-    const target = path.join(repoDir, relativePath);
-    await mkdir(path.dirname(target), { recursive: true });
-    const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(target, buffer);
+      file.name;
+    outbound.append("files", file, relativePath);
   }
 
   try {
-    const repo: CodeRepoInfo = await registerCodeRepo(repoDir, projectName);
+    const response = await fetch(`${RAG_BACKEND_URL}/code/upload`, {
+      method: "POST",
+      body: outbound,
+      signal: AbortSignal.timeout(300_000),
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as {
+        detail?: string;
+      } | null;
+      throw new Error(payload?.detail ?? "Code upload failed.");
+    }
+
+    const result = (await response.json()) as {
+      repo_id: string;
+      name: string;
+      file_count: number;
+      files: string[];
+    };
+
+    const repo: CodeRepoInfo = {
+      repoId: result.repo_id,
+      name: result.name,
+      fileCount: result.file_count,
+      files: result.files,
+    };
     return Response.json(repo);
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Code ingest failed.";
+      error instanceof Error ? error.message : "Code upload failed.";
     return Response.json({ error: message }, { status: 500 });
   }
 }

@@ -4,6 +4,9 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BACKEND_DIR.parent
 CHROMA_DIR = BACKEND_DIR / "data" / "chroma"
+UPLOADS_DIR = Path(
+    os.environ.get("UPLOADS_DIR", str(BACKEND_DIR / "data" / "uploads"))
+)
 COLLECTION_NAME = "documents"
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"

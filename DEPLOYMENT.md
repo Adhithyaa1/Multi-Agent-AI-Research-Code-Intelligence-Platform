@@ -146,8 +146,24 @@ See [.env.example](./.env.example) and [research-agent/.env.local.example](./res
 
 ---
 
+## Upload on Vercel
+
+Document and folder uploads **must go to the Python backend**, not the Vercel disk
+(Vercel serverless filesystem is read-only). The Next.js routes forward multipart
+files to:
+
+- `POST /ingest/upload` — PDF / md / txt
+- `POST /code/upload` — code project files
+- `POST /code/github` — clone on the backend host
+
+Ensure `RAG_BACKEND_URL` on Vercel points at Render (or another writable backend).
+
+---
+
 ## Limitations
 
 - Vercel serverless functions have timeout limits (60–300s depending on plan). Long multi-agent pipeline runs should use client-side streaming to the Python backend (`NEXT_PUBLIC_RAG_BACKEND_URL`).
 - Ollama tool calling quality varies by model; `llama3.1` is the tested default.
-- ChromaDB and uploaded files are local to the backend instance unless you mount persistent storage.
+- ChromaDB and uploaded files live on the backend host unless you mount persistent storage.
+- Render free tier sleeps when idle — first request after sleep can be slow.
+

@@ -1,10 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { SUPPORTED_UPLOAD_EXTENSIONS, UPLOAD_DIR } from "@/lib/config";
-import { ingestDocument, isRagBackendAvailable } from "@/lib/rag-client";
+import { SUPPORTED_UPLOAD_EXTENSIONS } from "@/lib/config";
+import { ingestDocumentUpload, isRagBackendAvailable } from "@/lib/rag-client";
 import type { UploadResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 function isSupportedUpload(file: File): boolean {
   const lowerName = file.name.toLowerCase();
@@ -42,36 +41,30 @@ export async function POST(req: Request) {
     );
   }
 
-  const uploadDir = path.join(process.cwd(), UPLOAD_DIR);
-  await mkdir(uploadDir, { recursive: true });
-
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const filename = `${Date.now()}-${safeName}`;
-  const filePath = path.join(uploadDir, filename);
-  const buffer = Buffer.from(await file.arrayBuffer());
-
-  await writeFile(filePath, buffer);
-
   const response: UploadResponse = {
     filename: file.name,
-    path: path.posix.join(UPLOAD_DIR, filename),
-    size: buffer.byteLength,
+    path: file.name,
+    size: file.size,
     ingested: false,
   };
 
-  if (await isRagBackendAvailable()) {
-    try {
-      const ingested = await ingestDocument(filePath);
-      response.documentId = ingested.document_id;
-      response.chunkCount = ingested.chunk_count;
-      response.ingested = true;
-    } catch (error) {
-      response.ingestError =
-        error instanceof Error ? error.message : "Ingestion failed.";
-    }
-  } else {
+  if (!(await isRagBackendAvailable())) {
     response.ingestError =
-      "RAG backend is not running. Start it with `uvicorn main:app --port 8000` in backend/.";
+      "RAG backend is not reachable. Check RAG_BACKEND_URL and that Render is awake.";
+    return Response.json(response, { status: 503 });
+  }
+
+  try {
+    // Forward bytes to the Python backend (Vercel filesystem is read-only).
+    const ingested = await ingestDocumentUpload(file);
+    response.documentId = ingested.document_id;
+    response.chunkCount = ingested.chunk_count;
+    response.filename = ingested.filename || file.name;
+    response.ingested = true;
+  } catch (error) {
+    response.ingestError =
+      error instanceof Error ? error.message : "Ingestion failed.";
+    return Response.json(response, { status: 500 });
   }
 
   return Response.json(response);

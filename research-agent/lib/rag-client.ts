@@ -54,6 +54,26 @@ export async function ingestDocument(filePath: string): Promise<IngestResult> {
   return (await response.json()) as IngestResult;
 }
 
+export async function ingestDocumentUpload(file: File): Promise<IngestResult> {
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+
+  const response = await fetch(`${RAG_BACKEND_URL}/ingest/upload`, {
+    method: "POST",
+    body: formData,
+    signal: AbortSignal.timeout(300_000),
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      detail?: string;
+    } | null;
+    throw new Error(payload?.detail ?? "Document ingestion failed.");
+  }
+
+  return (await response.json()) as IngestResult;
+}
+
 export async function retrieveContext(
   documentId: string,
   query: string,
